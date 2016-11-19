@@ -8,8 +8,10 @@ L.extend(L.DomEvent, {
 	POINTER_MOVE:   L.Browser.msPointer ? 'MSPointerMove'   : 'pointermove',
 	POINTER_UP:     L.Browser.msPointer ? 'MSPointerUp'     : 'pointerup',
 	POINTER_CANCEL: L.Browser.msPointer ? 'MSPointerCancel' : 'pointercancel',
+	TAG_WHITE_LIST: ['INPUT', 'SELECT', 'OPTION'],
 
 	_pointers: {},
+	_pointersCount: 0,
 
 	// Provides a touch events wrapper for (ms)pointer events.
 	// ref http://www.w3.org/TR/pointerevents/ https://www.w3.org/Bugs/Public/show_bug.cgi?id=22890
@@ -48,27 +50,51 @@ L.extend(L.DomEvent, {
 
 	_addPointerStart: function (obj, handler, id) {
 		var onDown = L.bind(function (e) {
-			L.DomEvent.preventDefault(e);
+			if (e.pointerType !== 'mouse' && e.pointerType !== e.MSPOINTER_TYPE_MOUSE) {
+				// In IE11, some touch events needs to fire for form controls, or
+				// the controls will stop working. We keep a whitelist of tag names that
+				// need these events. For other target tags, we prevent default on the event.
+				if (this.TAG_WHITE_LIST.indexOf(e.target.tagName) < 0) {
+					L.DomEvent.preventDefault(e);
+				} else {
+					return;
+				}
+			}
 
-			this._pointers[e.pointerId] = e;
 			this._handlePointer(e, handler);
 		}, this);
 
 		obj['_leaflet_touchstart' + id] = onDown;
 		obj.addEventListener(this.POINTER_DOWN, onDown, false);
 
-		// need to also listen for end events to keep the _pointers object accurate
+		// need to keep track of what pointers and how many are active to provide e.touches emulation
 		if (!this._pointerDocListener) {
-			var removePointer = L.bind(function (e) {
-				delete this._pointers[e.pointerId];
-			}, this);
+			var pointerUp = L.bind(this._globalPointerUp, this);
 
 			// we listen documentElement as any drags that end by moving the touch off the screen get fired there
-			document.documentElement.addEventListener(this.POINTER_UP, removePointer, false);
-			document.documentElement.addEventListener(this.POINTER_CANCEL, removePointer, false);
+			document.documentElement.addEventListener(this.POINTER_DOWN, L.bind(this._globalPointerDown, this), true);
+			document.documentElement.addEventListener(this.POINTER_MOVE, L.bind(this._globalPointerMove, this), true);
+			document.documentElement.addEventListener(this.POINTER_UP, pointerUp, true);
+			document.documentElement.addEventListener(this.POINTER_CANCEL, pointerUp, true);
 
 			this._pointerDocListener = true;
 		}
+	},
+
+	_globalPointerDown: function (e) {
+		this._pointers[e.pointerId] = e;
+		this._pointersCount++;
+	},
+
+	_globalPointerMove: function (e) {
+		if (this._pointers[e.pointerId]) {
+			this._pointers[e.pointerId] = e;
+		}
+	},
+
+	_globalPointerUp: function (e) {
+		delete this._pointers[e.pointerId];
+		this._pointersCount--;
 	},
 
 	_handlePointer: function (e, handler) {
@@ -86,7 +112,6 @@ L.extend(L.DomEvent, {
 			// don't fire touch moves when mouse isn't down
 			if ((e.pointerType === e.MSPOINTER_TYPE_MOUSE || e.pointerType === 'mouse') && e.buttons === 0) { return; }
 
-			this._pointers[e.pointerId] = e;
 			this._handlePointer(e, handler);
 		}, this);
 
@@ -96,7 +121,6 @@ L.extend(L.DomEvent, {
 
 	_addPointerEnd: function (obj, handler, id) {
 		var onUp = L.bind(function (e) {
-			delete this._pointers[e.pointerId];
 			this._handlePointer(e, handler);
 		}, this);
 
